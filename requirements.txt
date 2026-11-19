@@ -1,5 +1,5 @@
 mcp>=1.12,<2
-PyMySQL>=1.1,<2
+PyMySQL>=1.2.4,<2
 pg8000>=1.30,<2
 oracledb>=2.4,<5
 python-tds>=1.15,<2
