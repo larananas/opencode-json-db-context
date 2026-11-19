@@ -77,6 +77,14 @@ jobs:
         run: |
           sh ./setup.sh --yes
           sh ./setup.sh --check
+      - name: Confirm x64 Python compatibility on Windows ARM64
+        if: matrix.label == 'Windows-ARM64-x64-emulated'
+        shell: pwsh
+        run: |
+          $architecture = & ./.venv/Scripts/python.exe -c 'import platform; print(platform.machine().lower())'
+          if ($architecture.Trim() -notin @('amd64', 'x86_64')) {
+            throw "Expected x64 Python emulation on Windows ARM64; detected $architecture"
+          }
       - name: Test MCP SDK imports (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

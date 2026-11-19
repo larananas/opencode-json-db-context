@@ -17,7 +17,9 @@ function Test-Python([string[]]$exe) {
 function Find-Python {
     $candidates = New-Object System.Collections.ArrayList
     if ($env:TOHRU_DB_PYTHON) { [void]$candidates.Add(@($env:TOHRU_DB_PYTHON)) }
-    foreach ($name in @('py','python3','python')) {
+    # Prefer the explicit Python on PATH (e.g. a selected x64 runtime on Windows ARM64)
+    # before the system py launcher, which may default to native ARM64 Python.
+    foreach ($name in @('python','python3','py')) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
         if (-not $cmd) { continue }
         if ($name -eq 'py') {
