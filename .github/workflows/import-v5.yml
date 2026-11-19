@@ -1,0 +1,39 @@
+name: Assemble V5 source
+on:
+  push:
+    branches:
+      - release/v5
+    paths:
+      - '.bootstrap/parts/**'
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    if: github.event.head_commit.message == 'build: stage V5 source payload'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Verify archive and materialize source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/parts/*.b64 | base64 --decode > /tmp/v5_source.tar.xz
+          echo "800f63f0d2fa0bb40de69d2ad4c3b06a60455b3e53ea0ffc0c788d63ec221d88  /tmp/v5_source.tar.xz" | sha256sum --check
+          tar -xJf /tmp/v5_source.tar.xz -C .
+          rm -rf .bootstrap
+          python3 -m unittest discover -s tests -v
+          git add -A
+          python3 scripts/check_publication.py
+      - name: Commit verified source to release branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat: publish validated OpenCode JSON DB Context V5"
+          git push origin HEAD:release/v5
