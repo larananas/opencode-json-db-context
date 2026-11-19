@@ -1,0 +1,54 @@
+name: Live SQL integration (ephemeral containers)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-sql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { engine: mariadb, image: 'mariadb:11', port: 3306 }
+          - { engine: mysql, image: 'mysql:8.4', port: 3306 }
+          - { engine: postgresql, image: 'postgres:17', port: 5432 }
+    services:
+      database:
+        image: ${{ matrix.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pass
+          MYSQL_DATABASE: opencode_ci
+          MYSQL_USER: context_test
+          MYSQL_PASSWORD: ci_test_pass
+          MARIADB_ROOT_PASSWORD: ci_root_pass
+          MARIADB_DATABASE: opencode_ci
+          MARIADB_USER: context_test
+          MARIADB_PASSWORD: ci_test_pass
+          POSTGRES_DB: opencode_ci
+          POSTGRES_USER: context_test
+          POSTGRES_PASSWORD: ci_test_pass
+        ports:
+          - ${{ matrix.port }}:${{ matrix.port }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install driver dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Verify a real schema, row counts, relations, coherent samples and one JSON
+        env:
+          LIVE_ENGINE: ${{ matrix.engine }}
+          LIVE_HOST: 127.0.0.1
+          LIVE_PORT: ${{ matrix.port }}
+          LIVE_USER: context_test
+          LIVE_PASSWORD: ci_test_pass
+          LIVE_DATABASE: opencode_ci
+        run: python -m unittest discover -s tests -p 'test_live_sql.py' -v

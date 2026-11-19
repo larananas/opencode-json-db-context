@@ -1,0 +1,76 @@
+name: Cross-platform checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-platform:
+    name: ${{ matrix.label }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: Linux-x64, runner: ubuntu-24.04, python: '3.13' }
+          - { label: Linux-ARM64, runner: ubuntu-24.04-arm, python: '3.13' }
+          - { label: Windows-x64, runner: windows-2025, python: '3.13' }
+          - { label: Windows-ARM64, runner: windows-11-arm, python: '3.13' }
+          - { label: macOS-Intel, runner: macos-15-intel, python: '3.13' }
+          - { label: macOS-ARM64, runner: macos-15, python: '3.13' }
+          - { label: Linux-x64-Python310, runner: ubuntu-24.04, python: '3.10' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify project publication policy
+        run: python scripts/check_publication.py
+      - name: Diagnose missing dependencies (read-only)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          sh ./setup.sh --check || true
+          test ! -e .opencode/opencode.jsonc
+      - name: Diagnose missing dependencies (read-only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ./setup.ps1 -Check
+          if ($LASTEXITCODE -eq 0) { throw 'Fresh checkout should require setup' }
+          if (Test-Path .opencode/opencode.jsonc) { throw 'Check unexpectedly generated local configuration' }
+      - name: Test interactive setup with explicit CI approval (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ./setup.ps1 -Yes
+          if ($LASTEXITCODE -ne 0) { throw 'Windows setup failed' }
+          & ./setup.ps1 -Check
+          if ($LASTEXITCODE -ne 0) { throw 'Windows setup check failed' }
+      - name: Test interactive setup with explicit CI approval (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          sh ./setup.sh --yes
+          sh ./setup.sh --check
+      - name: Test MCP SDK imports (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.venv/Scripts/python.exe -c 'import mcp,pymysql,pg8000,oracledb,pytds'
+      - name: Test MCP SDK imports (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./.venv/bin/python -c 'import mcp,pymysql,pg8000,oracledb,pytds'
+      - name: Run all non-live tests
+        run: python -m unittest discover -s tests -v
+      - name: Verify local config is never tracked
+        shell: bash
+        run: |
+          git check-ignore -q .opencode/opencode.jsonc
+          git check-ignore -q .local/example.env
+          git check-ignore -q export/sample.json

@@ -1,0 +1,15 @@
+OpenCode JSON DB Context — repository marker
+
+OpenCode V2 recognizes opencode.jsonc, AGENTS.md, and .opencode/agents, commands and skills.
+The repository ships with MCP disabled until the user completes an interactive setup:
+- macOS/Linux: ./setup.sh
+- Windows PowerShell: .\setup.ps1
+
+Setup discovers or offers a compatible Python runtime, verifies/install required drivers
+only with explicit approval, then writes .opencode/opencode.jsonc (Git-ignored)
+for the local operating system. Re-run setup when moving the repository to another machine.
+
+Credentials or dotenv without an explicit scope export all accessible non-system SQL databases by default.
+Use .local/*.env for credential import without transmitting its content to the model.
+The default workflow is read-only relational SQL inspection and a single JSON in export/.
+MongoDB and other non-relational databases are not supported.
