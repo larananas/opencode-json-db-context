@@ -2,8 +2,14 @@ name: Live SQL integration (ephemeral containers)
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# Superseded runs should not occupy scarce ARM64/macOS CI runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
