@@ -23,18 +23,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { label: Linux-x64, runner: ubuntu-24.04, python: '3.13' }
-          - { label: Linux-ARM64, runner: ubuntu-24.04-arm, python: '3.13' }
-          - { label: Windows-x64, runner: windows-2025, python: '3.13' }
-          - { label: Windows-ARM64, runner: windows-11-arm, python: '3.13' }
-          - { label: macOS-Intel, runner: macos-15-intel, python: '3.13' }
-          - { label: macOS-ARM64, runner: macos-15, python: '3.13' }
-          - { label: Linux-x64-Python310, runner: ubuntu-24.04, python: '3.10' }
+          - { label: Linux-x64, runner: ubuntu-24.04, python: '3.13', architecture: x64 }
+          - { label: Linux-ARM64, runner: ubuntu-24.04-arm, python: '3.13', architecture: arm64 }
+          - { label: Windows-x64, runner: windows-2025, python: '3.13', architecture: x64 }
+          # Windows ARM64 host: x64 CPython uses the built-in Windows emulator.
+          # Some MCP transitive packages do not publish win_arm64 wheels.
+          - { label: Windows-ARM64-x64-emulated, runner: windows-11-arm, python: '3.13', architecture: x64 }
+          - { label: macOS-Intel, runner: macos-15-intel, python: '3.13', architecture: x64 }
+          - { label: macOS-ARM64, runner: macos-15, python: '3.13', architecture: arm64 }
+          - { label: Linux-x64-Python310, runner: ubuntu-24.04, python: '3.10', architecture: x64 }
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+          architecture: ${{ matrix.architecture }}
       - name: Verify project publication policy
         run: python scripts/check_publication.py
       - name: Diagnose missing dependencies (read-only)

@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import sysconfig
 from pathlib import Path
 import shutil
 import subprocess
@@ -126,6 +127,10 @@ def setup(yes: bool = False) -> None:
         result = run([str(venv_python()), '-m', 'pip', 'install', '--disable-pip-version-check',
                       '-r', str(REQ)])
         if result.returncode != 0:
+            if os.name == 'nt' and sysconfig.get_platform().lower() == 'win-arm64':
+                raise RuntimeError('Native Windows ARM64 package installation failed. Some dependencies lack '
+                                   'win_arm64 wheels. Install Windows x64 Python (supported by Windows ARM64 '
+                                   'emulation), set TOHRU_DB_PYTHON to that executable and rerun setup.ps1.')
             raise RuntimeError('Package installation failed. Check network, pip, and Python/CPU wheel availability.')
         MARKER.write_text(hashlib.sha256(REQ.read_bytes()).hexdigest(), encoding='utf-8')
         if not installed():

@@ -67,6 +67,19 @@ Cette configuration locale et `.venv/` sont **ignorés par Git**. Si vous dépla
 
 > **Limites réalistes :** l'installation automatique de Python dépend du gestionnaire de paquets disponible, des droits nécessaires et de l'existence de paquets compatibles avec le système. Sur Windows, le script utilise `winget` s'il est présent ; sur macOS, Homebrew ; sur Linux, les gestionnaires détectés (`apt`, `dnf`, `pacman`, `zypper`, `apk`). Si l'installation automatique ne convient pas, le programme affiche la marche à suivre. Aucun système n'est garanti sans prérequis.
 
+### Windows ARM64 : dépendances Python natives
+
+Le programme fonctionne sur les machines **Windows ARM64**, mais certaines dépendances du SDK MCP ne publient pas toujours de roues `win_arm64`. Dans ce cas, le Python ARM64 natif peut tenter une longue compilation ou échouer. La solution de compatibilité est **Python x64 sous l'émulation intégrée à Windows ARM64**, sans modifier le code du projet. La CI utilise volontairement un runner Windows ARM64 avec Python x64 et identifie cette configuration explicitement : elle ne prétend pas valider des dépendances natives ARM64.
+
+Si la version ARM64 de Python échoue à installer les dépendances, choisissez un Python x64 déjà installé et indiquez son chemin dans PowerShell avant de relancer l'assistant :
+
+```powershell
+$env:TOHRU_DB_PYTHON = 'C:\Path\To\Python-x64\python.exe'
+.\setup.ps1
+```
+
+Remplacez ce chemin d'exemple par l'emplacement réel de votre installation. Les erreurs d'installation sont affichées ; il n'y a pas de bascule silencieuse vers un autre interpréteur.
+
 ### Étape 3 — Ouvrir OpenCode
 
 Ouvrez ce dossier dans OpenCode ou lancez `opencode` depuis ce répertoire. Le profil `tohru-db` est l'agent principal par défaut.
