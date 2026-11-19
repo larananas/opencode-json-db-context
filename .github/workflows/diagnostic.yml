@@ -1,0 +1,9 @@
+name: Actions diagnostic
+on:
+  push:
+    branches: [release/v5]
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'GitHub Actions runner available'
