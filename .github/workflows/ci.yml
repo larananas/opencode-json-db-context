@@ -47,17 +47,21 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          & ./setup.ps1 -Check
-          if ($LASTEXITCODE -eq 0) { throw 'Fresh checkout should require setup' }
+          # setup.ps1 deliberately exits nonzero for a fresh checkout. Run it in
+          # a subprocess so its exit statement cannot terminate this CI wrapper.
+          $psExe = (Get-Process -Id $PID).Path
+          $probe = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-File', './setup.ps1', '-Check') -NoNewWindow -PassThru -Wait
+          if ($probe.ExitCode -ne 1) { throw "Fresh checkout diagnostic returned $($probe.ExitCode), expected 1" }
           if (Test-Path .opencode/opencode.jsonc) { throw 'Check unexpectedly generated local configuration' }
       - name: Test interactive setup with explicit CI approval (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          & ./setup.ps1 -Yes
-          if ($LASTEXITCODE -ne 0) { throw 'Windows setup failed' }
-          & ./setup.ps1 -Check
-          if ($LASTEXITCODE -ne 0) { throw 'Windows setup check failed' }
+          $psExe = (Get-Process -Id $PID).Path
+          $setup = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-File', './setup.ps1', '-Yes') -NoNewWindow -PassThru -Wait
+          if ($setup.ExitCode -ne 0) { throw "Windows setup returned $($setup.ExitCode)" }
+          $check = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-File', './setup.ps1', '-Check') -NoNewWindow -PassThru -Wait
+          if ($check.ExitCode -ne 0) { throw "Windows setup verification returned $($check.ExitCode)" }
       - name: Test interactive setup with explicit CI approval (POSIX)
         if: runner.os != 'Windows'
         shell: bash
