@@ -86,7 +86,7 @@ class DialectTests(unittest.TestCase):
         self.assertEqual(cfg["default_agent"], "tohru-db")
         self.assertTrue((ROOT / ".opencode/agents/tohru-db.md").exists())
         self.assertTrue((ROOT / ".opencode/commands/export-db.md").exists())
-        self.assertTrue((ROOT / ".OpenCode").exists())
+        self.assertFalse((ROOT / ".OpenCode").exists())
         self.assertEqual(cfg["mcp"]["servers"]["tohru_db"]["command"][-1], "scripts/run_mcp.py")
 
 

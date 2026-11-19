@@ -45,3 +45,13 @@ Thumbs.db
 secrets.*
 *.sqlite-journal
 *.db-journal
+
+# Additional local secrets and credentials
+.envrc
+*.crt
+*.cer
+*.pkcs12
+*.ovpn
+*.kdbx
+*.sops.yaml
+*.sops.yml

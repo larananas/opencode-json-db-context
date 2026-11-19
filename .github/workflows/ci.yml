@@ -25,7 +25,7 @@ jobs:
           - { label: macOS-ARM64, runner: macos-15, python: '3.13' }
           - { label: Linux-x64-Python310, runner: ubuntu-24.04, python: '3.10' }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
@@ -35,7 +35,13 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          sh ./setup.sh --check || true
+          set +e
+          sh ./setup.sh --check > check-output.txt 2>&1
+          status=$?
+          set -e
+          cat check-output.txt
+          test "$status" -eq 1
+          grep -q 'missing/incomplete' check-output.txt
           test ! -e .opencode/opencode.jsonc
       - name: Diagnose missing dependencies (read-only)
         if: runner.os == 'Windows'
@@ -66,6 +72,14 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: ./.venv/bin/python -c 'import mcp,pymysql,pg8000,oracledb,pytds'
+      - name: Check real MCP startup and tool discovery (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.venv/Scripts/python.exe scripts/check_mcp_startup.py
+      - name: Check real MCP startup and tool discovery (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./.venv/bin/python scripts/check_mcp_startup.py
       - name: Run all non-live tests
         run: python -m unittest discover -s tests -v
       - name: Verify local config is never tracked

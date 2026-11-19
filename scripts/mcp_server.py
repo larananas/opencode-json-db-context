@@ -6,13 +6,27 @@ from typing import Any
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from db_engine import ConnectionSpec, accessible_databases, engine_version, export_database, list_objects, open_connection
+from db_engine import ConnectionSpec, accessible_databases, engine_version, estimate_size, export_database, list_objects, open_connection
 from env_config import load_local_env, resolve_env
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("Tohru OpenCode JSON DB Context")
 _spec: ConnectionSpec | None = None
 ROOT = Path(__file__).resolve().parents[1]
+PRIVILEGED_USERS = {'root', 'sa', 'sys', 'system', 'postgres'}
+
+
+def _privileged_server_guard(spec: ConnectionSpec, scope: str, approved: bool) -> dict[str, Any] | None:
+    """A single explicit approval for exporting a whole server as an admin.
+
+    User names are merely a risk heuristic; use database-enforced read-only roles.
+    """
+    if scope == 'server' and spec.engine != 'sqlite' and spec.user.lower() in PRIVILEGED_USERS and not approved:
+        return {'status': 'confirmation_required', 'reason': 'privileged_server_export',
+                'message': 'An administrative account was detected. Confirm a full server export explicitly, '
+                           'or select a smaller scope / use a read-only account. No export started.',
+                'next_step': 'After explicit user approval, call again with approve_privileged_server_export=true.'}
+    return None
 
 
 def _spec_or_fail() -> ConnectionSpec:
@@ -30,7 +44,12 @@ def db_capabilities() -> dict[str, Any]:
         "scopes": ["server", "databases", "database", "schema", "table", "tables"],
         "default": {"scope": "server", "sample_limit": 20, "formats": ["one indented JSON"], "exact_row_counts": True, "coherent_samples": True, "compact_large_values": False},
         "dotenv": "Paste dotenv text through db_connect_env(env_text=...), or place an env file inside .local/ and call db_connect_env(env_file=...). Bare credentials/default dotenv exports all accessible non-system databases unless an explicit narrower scope or connect_only is specified. Never echo credentials.",
-        "security": "Exporter is read-only. Output remains local. MCP tool results do not include sample row values. Do not enter credentials in chat for sensitive production systems unless authorized by your organization.",
+        "security": "Exporter is read-only. Output remains local. MCP tools never return sample row values. "
+                    "Use a read-only account. A privileged account needs one explicit confirmation for global export. "
+                    "Optional sample-column redaction is best effort, not guaranteed anonymization.",
+        "tls": "Optional tls_mode=auto|require|verify_ca|verify_identity for MariaDB/MySQL and PostgreSQL; "
+               "SQL Server and Oracle use server-enforced TLS configuration (explicit TLS modes rejected). "
+               "Place CA files only in ignored .local/.",
         "platform_notes": {
             "oracle":"server means accessible Oracle schemas within one service, not every pluggable database",
             "postgresql":"server means connectable non-template databases; each opened separately",
@@ -44,12 +63,20 @@ def db_capabilities() -> dict[str, Any]:
 @mcp.tool()
 def db_connect(engine: str, host: str = "localhost", port: int = 0, user: str = "",
                password: str = "", database: str = "", service: str = "", path: str = "",
-               server_label: str = "") -> dict[str, Any]:
+               server_label: str = "", tls_mode: str = "auto", tls_ca_file: str = "") -> dict[str, Any]:
     """Connect to a SQL engine. Requires an explicit user-supplied password or blank for passwordless auth. No credentials saved. sqlite uses path. Never echo password."""
     global _spec
     spec = ConnectionSpec(engine=engine, host=host, port=port or None, user=user, password=password,
-                          database=database, service=service, path=path, server_label=server_label)
-    conn = open_connection(spec)
+                          database=database, service=service, path=path, server_label=server_label,
+                          tls_mode=tls_mode, tls_ca_file=tls_ca_file)
+    # Failed manual connection must not leave a previous server selected.
+    _spec = None
+    try:
+        conn = open_connection(spec)
+    except Exception as exc:
+        return {"status": "connection_failed", "engine": spec.engine,
+                "error_type": type(exc).__name__,
+                "next_step": "Verify host, credentials, TLS settings and network reachability"}
     try:
         if spec.engine == "oracle":
             cur=conn.cursor()
@@ -120,11 +147,52 @@ def db_inspect(database: str = "", include_tables: bool = True) -> dict[str, Any
 
 
 @mcp.tool()
+def db_preview_export(scope: str = "server", database: str = "", schema: str = "") -> dict[str, Any]:
+    """Estimate scope and scale without sampling, COUNT(*) or writing files.
+
+    Estimates can be stale or unavailable; this is a fast planning aid, not
+    a replacement for exact counts in the resulting JSON.
+    """
+    spec = _spec_or_fail()
+    errors: list[str] = []
+    root = open_connection(spec)
+    try:
+        databases = accessible_databases(root, spec, errors)
+        targets = databases if scope == 'server' else [database]
+        if scope not in ('server', 'database') or not all(target in databases for target in targets):
+            raise ValueError('Preview supports accessible server or single database scope only')
+        per_db: dict[str, Any] = {}
+        for db in targets:
+            conn = root if spec.engine in ('oracle', 'sqlite') else open_connection(spec, db)
+            try:
+                objects = list_objects(conn, spec, db, errors)
+                tables = [obj for obj in objects if obj['type'] == 'table' and
+                          (not schema or obj['schema'] == schema)]
+                estimates = [estimate_size(conn, spec, db, obj, errors) for obj in tables]
+                per_db[db] = {'table_count': len(tables),
+                              'estimated_rows_known': sum(n for n in estimates if n is not None),
+                              'unknown_size_tables': sum(n is None for n in estimates)}
+            finally:
+                if conn is not root:
+                    conn.close()
+        total_tables = sum(v['table_count'] for v in per_db.values())
+        return {'status': 'preview', 'scope': scope, 'databases': per_db,
+                'table_count': total_tables, 'estimated_total_rows_known': sum(v['estimated_rows_known'] for v in per_db.values()),
+                'expensive_export_risk': total_tables > 500 or any(
+                    v['estimated_rows_known'] > 5_000_000 for v in per_db.values()),
+                'privileged_account': spec.user.lower() in PRIVILEGED_USERS,
+                'warnings': errors + ['Counts are estimates; actual export uses COUNT(*) and may be expensive']}
+    finally:
+        root.close()
+
+
+@mcp.tool()
 def db_export(scope: str = "server", database: str = "", schema: str = "", table: str = "",
               database_names: list[str] | None = None, table_names: list[str] | None = None,
               sample_limit: int = 20, expensive_sampling: bool = False,
               coherent_samples: bool = True, compact_large_values: bool = False,
-              max_value_bytes: int = 4096) -> dict[str, Any]:
+              max_value_bytes: int = 4096, redact_sensitive_data: bool = False,
+              approve_privileged_server_export: bool = False) -> dict[str, Any]:
     """Export the exact requested scope to one local JSON; no CSV or retained temp artifacts.
 
     Scope 'tables' selects a named list in one database (schema-qualified when needed).
@@ -135,11 +203,15 @@ def db_export(scope: str = "server", database: str = "", schema: str = "", table
     Only output paths and counters are returned; no samples enter AI tool context.
     """
     spec = _spec_or_fail()
+    guard = _privileged_server_guard(spec, scope, approve_privileged_server_export)
+    if guard:
+        return guard
     return export_database(spec, scope=scope, database=database, schema=schema, table=table,
                            database_names=database_names, table_names=table_names,
                            sample_limit=sample_limit, expensive_sampling=expensive_sampling,
                            coherent_samples=coherent_samples, compact_large_values=compact_large_values,
-                           max_value_bytes=max_value_bytes, output_dir=ROOT / "export")
+                           max_value_bytes=max_value_bytes, redact_sensitive_data=redact_sensitive_data,
+                           output_dir=ROOT / "export")
 
 
 @mcp.tool()
@@ -148,7 +220,8 @@ def db_connect_env(env_text: str = "", env_file: str = "", scope: str = "server"
                    table: str = "", database_names: list[str] | None = None,
                    table_names: list[str] | None = None, sample_limit: int = 20,
                    coherent_samples: bool = True, compact_large_values: bool = False,
-                   expensive_sampling: bool = False) -> dict[str, Any]:
+                   expensive_sampling: bool = False, redact_sensitive_data: bool = False,
+                   approve_privileged_server_export: bool = False) -> dict[str, Any]:
     """Parse pasted dotenv text OR a local ignored .local/*.env file and connect safely.
 
     By default, also export the accessible non-system server scope into ONE JSON.
@@ -190,12 +263,17 @@ def db_connect_env(env_text: str = "", env_file: str = "", scope: str = "server"
                   "recognized_keys": resolution.recognized_keys, "warnings": resolution.warnings}
     if connect_only:
         return {"connection": connection, "status": "connected", "next_step": "db_inspect or db_export as explicitly requested"}
+    guard = _privileged_server_guard(spec, scope, approve_privileged_server_export)
+    if guard:
+        return {'connection': connection, **guard}
     target_database = database or (spec.database if scope in ("database", "schema", "table", "tables") else "")
     result = export_database(spec, scope=scope, database=target_database, schema=schema, table=table,
                              database_names=database_names, table_names=table_names,
                              sample_limit=sample_limit, coherent_samples=coherent_samples,
                              compact_large_values=compact_large_values,
-                             expensive_sampling=expensive_sampling, output_dir=ROOT / "export")
+                             expensive_sampling=expensive_sampling,
+                             redact_sensitive_data=redact_sensitive_data,
+                             output_dir=ROOT / "export")
     return {"connection": connection, "export": result, "status": result["status"]}
 
 
@@ -208,20 +286,27 @@ def db_connect_and_export(engine: str, host: str = "localhost", port: int = 0,
                           table_names: list[str] | None = None, sample_limit: int = 20,
                           coherent_samples: bool = True,
                           compact_large_values: bool = False,
-                          expensive_sampling: bool = False) -> dict[str, Any]:
+                          expensive_sampling: bool = False, redact_sensitive_data: bool = False,
+                          approve_privileged_server_export: bool = False,
+                          tls_mode: str = "auto", tls_ca_file: str = "") -> dict[str, Any]:
     """Use bare connection credentials to connect and export server scope by default.
 
     For a connect-only request use db_connect, not this tool. The returned data
     never contains passwords or actual sampled rows.
     """
     connection = db_connect(engine=engine, host=host, port=port, user=user,
-                            password=password, database=database, service=service, path=path)
+                            password=password, database=database, service=service, path=path,
+                            tls_mode=tls_mode, tls_ca_file=tls_ca_file)
     result = db_export(scope=scope, database=database if scope in ("database", "schema", "table", "tables") else "",
                        schema=schema, table=table, database_names=database_names,
                        table_names=table_names, sample_limit=sample_limit,
                        coherent_samples=coherent_samples,
                        compact_large_values=compact_large_values,
-                       expensive_sampling=expensive_sampling)
+                       expensive_sampling=expensive_sampling,
+                       redact_sensitive_data=redact_sensitive_data,
+                       approve_privileged_server_export=approve_privileged_server_export)
+    if result.get('status') == 'confirmation_required':
+        return {'connection': connection, **result}
     return {"connection": connection, "export": result, "status": result["status"]}
 
 

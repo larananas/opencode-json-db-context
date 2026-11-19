@@ -209,6 +209,16 @@ def resolve_env(content: str) -> EnvResolution:
                 fields["password"] = root_password
                 recognized.update(k for k in ("MYSQL_ROOT_PASSWORD", "MARIADB_ROOT_PASSWORD") if k in data)
                 warnings.append("Root credentials detected; prefer a dedicated read-only database account")
+    tls_raw = _first(data, "DB_SSL_MODE", "DATABASE_SSL_MODE", "PGSSLMODE")
+    tls_aliases = {"verify-full": "verify_identity", "verify-ca": "verify_ca",
+                   "verify_identity": "verify_identity", "verify_ca": "verify_ca",
+                   "require": "require", "prefer": "auto", "allow": "auto"}
+    tls_mode = tls_aliases.get(tls_raw.lower(), tls_raw.lower()) if tls_raw else "auto"
+    if tls_mode not in ("auto", "require", "verify_ca", "verify_identity"):
+        raise ValueError("Unsupported TLS mode; use auto, require, verify_ca or verify_identity")
+    tls_ca_file = _first(data, "DB_SSL_CA", "DB_SSL_CA_FILE", "PGSSLROOTCERT", "MYSQL_SSL_CA")
+    recognized.update(k for k in ("DB_SSL_MODE", "DATABASE_SSL_MODE", "PGSSLMODE",
+                                  "DB_SSL_CA", "DB_SSL_CA_FILE", "PGSSLROOTCERT", "MYSQL_SSL_CA") if k in data)
     port_str = fields.get("port", "")
     try:
         port = int(port_str) if port_str else None
@@ -217,7 +227,7 @@ def resolve_env(content: str) -> EnvResolution:
     spec = ConnectionSpec(engine=fields["engine"], host=fields.get("host", "localhost"), port=port,
                           user=fields.get("user", ""), password=fields.get("password", ""),
                           database=fields.get("database", ""), service=fields.get("service", ""),
-                          path=fields.get("path", ""))
+                          path=fields.get("path", ""), tls_mode=tls_mode, tls_ca_file=tls_ca_file)
     if spec.engine != "sqlite" and spec.host.lower() in ("db", "database", "mysql", "mariadb", "postgres", "postgresql", "sqlserver", "mssql", "oracle"):
         warnings.append("Host appears to be a Docker/Compose service name. If OpenCode runs outside that container network, use localhost/127.0.0.1 and the published host port; container ports are not necessarily host ports")
     if spec.engine == "sqlite":

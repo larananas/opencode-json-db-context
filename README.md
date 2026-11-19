@@ -4,7 +4,7 @@
 
 Cet outil est un agent spécialisé pour [OpenCode](https://opencode.ai/). Il inspecte les bases SQL accessibles, décrit les colonnes, les contraintes, les index et les relations, compte les lignes réelles et ajoute jusqu'à **20 lignes d'exemple par table**. Il enregistre le résultat dans **un seul fichier JSON lisible**, dans `export/`.
 
-Pas besoin de documenter les tables manuellement, de copier des résultats SQL dans le chat ou de produire une collection de CSV. L'extraction s'exécute localement via un serveur MCP.
+Pas besoin de documenter les tables manuellement, de copier des résultats SQL dans le chat ou de produire une collection de CSV. L'extraction s'exécute localement via un serveur MCP. Le dépôt est compatible avec les bases relationnelles, mais ne constitue ni une sauvegarde complète ni un outil d'anonymisation de données.
 
 > **Périmètre : bases relationnelles uniquement.** MongoDB, les bases documentaires, les graphes et les magasins clé-valeur ne sont pas pris en charge. Ce projet n'est **pas** un outil de sauvegarde intégrale : seules la structure et des données d'exemple sont exportées.
 
@@ -18,9 +18,11 @@ Pas besoin de documenter les tables manuellement, de copier des résultats SQL d
 - **Exemples liés par défaut :** ajout prioritaire de lignes parentes référencées par les exemples enfants, lorsque les relations déclarées et le périmètre le permettent.
 - **Grosses tables :** méthode d'échantillonnage plus légère pour certaines clés primaires entières ; les limitations sont signalées.
 - **Mode compact, en option :** remplacement des grandes valeurs texte/binaires par un résumé pour réduire la taille du JSON.
-- **Un JSON final :** pas de CSV ni de fichiers temporaires conservés dans `export/`. Les anciens JSON restent disponibles.
+- **Un JSON final :** pas de CSV ni de fichiers temporaires conservés dans `export/`. Les anciens JSON restent disponibles. Un éventuel fichier étranger placé dans `export/` est déplacé vers `.local/recovered-exports/` afin de ne pas le supprimer sans avertissement.
 - **Validation intégrée :** totaux, tables détectées, échantillons, erreurs et avertissements.
 - **Lecture uniquement :** les outils MCP ne modifient pas les données ni le schéma SQL.
+- **Diagnostic avant export :** `db_preview_export` estime la taille et le nombre de tables sans comptage coûteux ni fichiers produits.
+- **Masquage facultatif :** `redact_sensitive_data=true` masque certaines colonnes d'exemple (protection indicative, jamais anonymisation garantie).
 
 ## 🚀 Installation (Windows, Linux et macOS)
 
@@ -31,10 +33,10 @@ L'installation se fait **dans le dossier du projet**, quel que soit le processeu
 Téléchargez le ZIP du dépôt GitHub et décompressez-le, ou clonez le dépôt :
 
 ```sh
-git clone https://github.com/VOTRE_COMPTE/opencode-json-db-context.git
+git clone https://github.com/larananas/opencode-json-db-context.git
 ```
 
-L'adresse est un **exemple à adapter après publication**.
+Le dépôt public officiel est [larananas/opencode-json-db-context](https://github.com/larananas/opencode-json-db-context).
 
 ### Étape 2 — Lancer l'assistant d'installation
 
@@ -80,7 +82,7 @@ Ou utilisez les commandes :
 - `/connect-db` pour établir une connexion ;
 - `/export-db` pour exporter un périmètre précis.
 
-L'agent répond normalement dans **la langue de l'utilisateur** : les instructions techniques internes sont rédigées en anglais, mais aucune langue n'est imposée pour la conversation.
+Vous pouvez vérifier le démarrage réel du serveur MCP après l'installation avec `.venv/bin/python scripts/check_mcp_startup.py` (macOS/Linux) ou `.venv\Scripts\python.exe scripts/check_mcp_startup.py` (Windows). L'agent répond normalement dans **la langue de l'utilisateur** : les instructions techniques internes sont rédigées en anglais, mais aucune langue n'est imposée pour la conversation.
 
 ### Diagnostiquer l'installation, sans rien modifier
 
@@ -167,7 +169,11 @@ Exporte tout le serveur avec 20 exemples liés par table.
 
 → Export global et échantillons liés **best effort**, sans dépasser 20 lignes par table.
 
-Les instructions de l’agent sont en anglais, mais il répond dans la langue de votre demande. L’outil reste utilisable pour des questions SQL sans demander systématiquement un export.
+Les instructions de l’agent sont en anglais, mais il répond dans la langue de votre demande.
+
+**Comptes privilégiés :** pour un export global avec un utilisateur ressemblant à un administrateur (`root`, `postgres`, `sa`, etc.), Tohru demande une seule confirmation explicite avant de procéder. Les comptes standards en lecture seule gardent le fonctionnement sans validation supplémentaire.
+
+**Volumes importants :** vous pouvez demander « Preview the server export » pour obtenir rapidement le nombre de tables et les estimations de taille sans exécuter `COUNT(*)` ni charger des exemples. Le comptage exact peut rester coûteux sur de gros serveurs : privilégiez un périmètre explicite si nécessaire. L’outil reste utilisable pour des questions SQL sans demander systématiquement un export.
 
 ## 🧩 Que contient le JSON ?
 
@@ -305,7 +311,7 @@ Cet exemple montre **une base contenant deux tables liées**. Il reprend la hié
 }
 ```
 
-Dans cet exemple, `orders.customer_id = 1` pointe bien sur `customers.id = 1`. En **mode par défaut**, Tohru conserve les exemples aléatoires, puis essaie d’inclure les lignes parentes référencées par ces exemples **dans les tables déjà sélectionnées**. La cohérence est un objectif *best effort* et peut être partielle si 20 lignes ne suffisent pas. Vous pouvez demander `coherent_samples=false` pour conserver des exemples totalement indépendants.
+Dans cet exemple, `orders.customer_id = 1` pointe bien sur `customers.id = 1`. En **mode par défaut**, Tohru conserve les exemples aléatoires, puis essaie d’inclure les lignes parentes référencées par ces exemples **dans les tables déjà sélectionnées**. La cohérence est un objectif *best effort* et peut être partielle si 20 lignes ne suffisent pas. Vous pouvez demander `coherent_samples=false` pour conserver des exemples totalement indépendants. En contexte sensible, `redact_sensitive_data=true` masque les colonnes d'échantillon dont le nom suggère un secret (`password`, `token`, `email`, etc.) ; **cela ne protège pas tous les champs libres ni les métadonnées/DDL**, et peut réduire la cohérence de certaines relations. Pour ne jamais exporter de données d'exemple, demandez `sample_limit=0`.
 
 ## 🗃️ Bases de données et compatibilité
 
@@ -321,6 +327,12 @@ Dans cet exemple, `orders.customer_id = 1` pointe bien sur `customers.id = 1`. E
 
 Les métadonnées accessibles et les options d'authentification dépendent du serveur et des permissions de connexion. Le DDL complet `CREATE TABLE` n'est **pas garanti** pour tous les moteurs. Oracle fonctionne en mode Thin, avec les limitations d'authentification propres à ce mode ; son périmètre « serveur » correspond aux schémas du service Oracle connecté.
 
+### Connexions chiffrées (TLS)
+
+Pour MariaDB/MySQL et PostgreSQL, les options facultatives `tls_mode=auto|require|verify_ca|verify_identity` sont disponibles directement ou via `DB_SSL_MODE` / `PGSSLMODE`. **`verify_identity` est recommandé pour un serveur distant** : il valide le certificat et le nom d'hôte. Un CA privé peut être fourni par `DB_SSL_CA` en plaçant son fichier dans `.local/` (par exemple `.local/ca.pem`). `require` chiffre sans vérifier l'identité et n'offre pas la même protection. Le mode `auto` laisse le pilote négocier selon ses propres règles ; il ne garantit pas TLS.
+
+Pour Oracle et SQL Server, ce projet n'expose pas encore ces mêmes options de configuration TLS. Il refuse les modes explicites non implémentés plutôt que de laisser croire qu'ils sont sécurisés : configurez le chiffrement et sa validation sur le serveur et le client selon votre environnement. La prise en charge complète de TCPS/TLS de ces moteurs nécessite des essais d'intégration supplémentaires.
+
 ### SQLite : emplacement des fichiers
 
 Par conception, OpenCode n'a pas d'accès général hors du dépôt. Les fichiers SQLite doivent donc se trouver **dans le projet**, par exemple dans `.local/` (répertoire ignoré par Git). Les chemins qui pointent vers l'extérieur, y compris au travers d'un lien symbolique, sont refusés.
@@ -329,7 +341,7 @@ Par conception, OpenCode n'a pas d'accès général hors du dépôt. Les fichier
 
 Les tâches ordinaires — import `.env`, connexion SQL, exploration, export JSON — sont **autorisées par défaut** via les outils MCP dédiés. Pas de demande supplémentaire pour chaque lecture ou export.
 
-En contrepartie, le profil OpenCode du projet **n'autorise pas** le shell général, les modifications libres de fichiers ni les accès à un répertoire externe. Cela permet à l'agent de générer des requêtes SQL et de répondre à des questions sans lui donner le droit d'exécuter des programmes arbitraires sur l'ordinateur.
+En contrepartie, le profil OpenCode du projet **n'autorise pas** le shell général, la recherche globale (`grep`/`glob`), les modifications libres de fichiers ni les accès à un répertoire externe. Il refuse également la lecture directe des fichiers dans `.local/` et `export/` : seul le MCP peut extraire les données sans les renvoyer au modèle. Cela permet à l'agent de générer des requêtes SQL et de répondre à des questions sans lui donner le droit d'exécuter des programmes arbitraires sur l'ordinateur.
 
 La base SQL est inspectée en **lecture seule**. L'outil ne fournit aucune commande de modification des données ou du schéma. Pour de telles opérations, l'agent peut expliquer la requête à effectuer, mais pas l'exécuter via le MCP livré.
 
@@ -341,7 +353,6 @@ Les configurations OpenCode globales ou les politiques administrées peuvent com
 
 ```text
 opencode-json-db-context/
-├── .OpenCode                   # Repère informatif
 ├── .gitignore                  # Exports, pilotes et secrets locaux exclus
 ├── .github/workflows/          # CI multiplateforme et intégration SQL
 ├── .opencode/
@@ -366,7 +377,7 @@ opencode-json-db-context/
 └── tests/                      # Tests automatiques
 ```
 
-Après installation, `.venv/`, `.opencode/opencode.jsonc`, `.local/` et `export/` apparaissent localement et **ne sont pas publiés**.
+Après installation, `.venv/`, `.opencode/opencode.jsonc`, `.local/` et `export/` apparaissent localement et **ne sont pas publiés**. Ne recréez pas de fichier `.OpenCode` à la racine : son nom entre en collision avec le dossier `.opencode/` sur Windows et sur certains volumes macOS.
 
 ## 🧪 Tests et compatibilité multiplateforme
 
@@ -382,7 +393,7 @@ Sur Windows, utilisez `py -3 -m unittest discover -s tests -v` si la commande `p
 
 GitHub Actions exécute, après publication :
 
-- **Vérification multiplateforme** : Windows x64/ARM64, Linux x64/ARM64 et macOS Intel/Apple Silicon, plus Linux Python 3.10. Ces jobs vérifient le démarrage guidé, les pilotes installés, la configuration MCP et les tests SQLite.
+- **Vérification multiplateforme** : Windows x64/ARM64, Linux x64/ARM64 et macOS Intel/Apple Silicon, plus Linux Python 3.10. Ces jobs vérifient le démarrage guidé, les pilotes installés, **une vraie négociation MCP**, la configuration MCP et les tests SQLite.
 - **Intégration SQL réelle** : trois serveurs éphémères MariaDB, MySQL et PostgreSQL. Chaque job crée deux tables de test liées, exporte un vrai JSON et vérifie les contraintes, les exemples et les compteurs.
 - **Protection du dépôt** : vérification des fichiers sensibles suivis et de l’exclusion des fichiers générés.
 
@@ -394,7 +405,7 @@ Les tests unitaires peuvent réussir alors qu’un service SQL particulier refus
 
 - Ne committez jamais les fichiers `export/`, `.local/`, `.venv/`, les `.env` réels, les bases SQLite ou la configuration générée `.opencode/opencode.jsonc`.
 - Exécutez `python3 scripts/check_publication.py` pour repérer des fichiers privés évidents ; un contrôle humain et la détection native des secrets GitHub restent recommandés.
-- Le projet est sous **licence MIT**. L’archive d’origine ne contient pas de jeux de données personnels.
+- Le projet est sous **licence MIT**. L’archive d’origine ne contient pas de jeux de données personnels. Les fichiers ne sont pas anonymisés par défaut. Consultez également [SECURITY.md](SECURITY.md) pour signaler une vulnérabilité et [CONTRIBUTING.md](CONTRIBUTING.md) pour contribuer.
 
 ## 🤝 Contribuer
 

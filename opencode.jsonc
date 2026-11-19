@@ -9,6 +9,11 @@
     },
     {
       "action": "read",
+      "resource": "*.env.example",
+      "effect": "allow"
+    },
+    {
+      "action": "read",
       "resource": "*.env",
       "effect": "deny"
     },
@@ -16,11 +21,6 @@
       "action": "read",
       "resource": "*.env.*",
       "effect": "deny"
-    },
-    {
-      "action": "read",
-      "resource": "*.env.example",
-      "effect": "allow"
     },
     {
       "action": "read",
@@ -34,18 +34,58 @@
     },
     {
       "action": "read",
+      "resource": "*.p12",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*.pfx",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
       "resource": "*credentials*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*.sqlite*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*.db",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*.db-*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*.local/*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*export/*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*.venv/*",
       "effect": "deny"
     },
     {
       "action": "glob",
       "resource": "*",
-      "effect": "allow"
+      "effect": "deny"
     },
     {
       "action": "grep",
       "resource": "*",
-      "effect": "allow"
+      "effect": "deny"
     },
     {
       "action": "skill",
@@ -74,6 +114,16 @@
     },
     {
       "action": "subagent",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "execute",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "opencode_read_mcp_resource",
       "resource": "*",
       "effect": "deny"
     },

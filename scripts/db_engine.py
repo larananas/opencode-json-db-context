@@ -12,6 +12,7 @@ import json
 import math
 import hashlib
 import secrets
+import ssl
 import os
 from pathlib import Path
 import re
@@ -41,6 +42,8 @@ class ConnectionSpec:
     path: str = ""
     timeout: int = 15
     server_label: str = ""
+    tls_mode: str = "auto"
+    tls_ca_file: str = ""
 
     def __post_init__(self) -> None:
         aliases = {"postgres": "postgresql", "postgresql": "postgresql", "mssql": "sqlserver", "sql_server": "sqlserver", "sqlite3": "sqlite"}
@@ -51,6 +54,10 @@ class ConnectionSpec:
             raise ValueError("Port must be in 1..65535")
         if not self.path and self.engine == "sqlite":
             raise ValueError("SQLite requires an existing file path")
+        if self.tls_mode not in ("auto", "require", "verify_ca", "verify_identity"):
+            raise ValueError("tls_mode must be auto, require, verify_ca or verify_identity")
+        if self.engine == "sqlite" and self.tls_mode != "auto":
+            raise ValueError("TLS options are not applicable to SQLite files")
 
 
 def slug(value: str) -> str:
@@ -121,6 +128,44 @@ def query_safe(conn: Any, query: str, errors: list[str], context: str) -> list[d
         return []
 
 
+def tls_context(spec: ConnectionSpec) -> ssl.SSLContext | None:
+    """Prepare opt-in transport policy using the operating system's CA store.
+
+    Modes 'require' and 'verify_ca' deliberately do not validate a hostname;
+    recommend verify_identity for remote servers. The CA file must be inside
+    the ignored project .local/ directory to prevent arbitrary host-file reads.
+    """
+    if spec.tls_mode == "auto":
+        return None
+    ca = None
+    if spec.tls_ca_file:
+        project = Path(__file__).resolve().parents[1]
+        filename = Path(spec.tls_ca_file)
+        if filename.is_absolute() or ".." in filename.parts:
+            raise ValueError("TLS CA must be a project-relative file inside .local/")
+        filename = project / (filename if filename.parts and filename.parts[0] == '.local'
+                              else Path('.local') / filename)
+        try:
+            allowed = (project / '.local').resolve(strict=True)
+            allowed.relative_to(project.resolve())
+            resolved = filename.resolve(strict=True)
+            resolved.relative_to(allowed)
+        except (ValueError, OSError, RuntimeError):
+            raise ValueError("TLS CA must exist inside the project .local/ directory") from None
+        if not resolved.is_file():
+            raise ValueError("TLS CA must be a regular file")
+        ca = str(resolved)
+    if spec.tls_mode == 'require':
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE  # Encryption only; NOT authentication.
+        return context
+    context = ssl.create_default_context(cafile=ca)
+    if spec.tls_mode == 'verify_ca':
+        context.check_hostname = False
+    return context
+
+
 def open_connection(spec: ConnectionSpec, database: str | None = None) -> Any:
     engine = spec.engine
     db = database if database is not None else spec.database
@@ -141,25 +186,38 @@ def open_connection(spec: ConnectionSpec, database: str | None = None) -> Any:
                    "connect_timeout": spec.timeout, "read_timeout": 180, "autocommit": True, "charset": "utf8mb4"}
         if db:
             options["database"] = db
+        context = tls_context(spec)
+        if context is not None:
+            options["ssl"] = context
         conn = pymysql.connect(**options)
         # Read-only transaction is not used because multiple metadata reads are required.
         return conn
     if engine == "postgresql":
         import pg8000.dbapi
-        conn = pg8000.dbapi.connect(user=spec.user, password=spec.password, host=spec.host,
-                                   port=spec.port or 5432, database=db or "postgres", timeout=spec.timeout)
+        options = {"user": spec.user, "password": spec.password, "host": spec.host,
+                   "port": spec.port or 5432, "database": db or "postgres", "timeout": spec.timeout}
+        context = tls_context(spec)
+        if context is not None:
+            options["ssl_context"] = context
+        conn = pg8000.dbapi.connect(**options)
         conn.autocommit = True
         return conn
     if engine == "sqlserver":
+        if spec.tls_mode != "auto":
+            raise ValueError("Explicit TLS mode is not supported by the bundled SQL Server adapter. "
+                             "Use server-enforced TLS rather than silently downgrading the connection.")
         import pytds
         return pytds.connect(server=spec.host, port=spec.port or 1433, database=db or "master",
                              user=spec.user, password=spec.password, login_timeout=spec.timeout, timeout=180,
-                             autocommit=True)
+                             autocommit=True, readonly=True)
     if engine == "oracle":
-        import oracledb
         service = spec.service or spec.database
         if not service:
             raise ValueError("Oracle requires a service name")
+        if spec.tls_mode != "auto":
+            raise ValueError("Explicit TLS mode is not supported by the bundled Oracle adapter. "
+                             "Use Oracle Thin with server-enforced TCPS configuration instead.")
+        import oracledb
         return oracledb.connect(user=spec.user, password=spec.password,
                                 dsn=f"{spec.host}:{spec.port or 1521}/{service}", tcp_connect_timeout=spec.timeout)
     raise ValueError(engine)
@@ -760,6 +818,32 @@ def enrich_related_samples(conn: Any, spec: ConnectionSpec, database: str, rec: 
     return stats
 
 
+SENSITIVE_COLUMN = re.compile(
+    r"(^|_)(?:password|passwd|pwd|secret|token|apikey|api_key|private_key|credential|"
+    r"email|phone|mobile|iban|ssn|national_id|social_security|authorization|auth_token|"
+    r"password_hash|hash)(?:_|$)", re.I
+)
+
+
+def redact_samples(rec: dict[str, Any]) -> int:
+    """Opt-in, intentionally lossy privacy protection for sampled row values.
+
+    This is not guaranteed anonymization. It never modifies schema metadata.
+    The relationships may be less useful if a sensitive FK field is redacted.
+    """
+    count = 0
+    for group in rec["schemas"].values():
+        for obj in group["tables"].values():
+            sensitive = {name for row in obj["sample_rows"] for name in row
+                         if SENSITIVE_COLUMN.search(name)}
+            for row in obj["sample_rows"]:
+                for name in sensitive:
+                    if row.get(name) is not None:
+                        row[name] = {"$type": "redacted", "reason": "sensitive_column"}
+                        count += 1
+    return count
+
+
 def validate_document(out: dict[str, Any], selected: dict[str, list[dict[str, str]]], limit: int,
                       issues: list[str]) -> dict[str, Any]:
     """Independent checks over JSON-bound structure. Does not claim server snapshot consistency."""
@@ -905,21 +989,40 @@ def _filter_extra_metadata(metadata: dict[str, Any], scope: str,
 
 
 def _cleanup_export_directory(path: Path) -> None:
-    """Dedicated export/ contains completed JSON documents only.
+    """Keep only JSON in export while preserving non-JSON user files elsewhere.
 
-    Never remove earlier JSON exports or any subdirectories. Remove transient
-    files and legacy CSVs only after a new JSON has been published successfully.
+    Files belonging to earlier exporter versions are deleted. Unknown files
+    are moved into the ignored sibling .local/recovered-exports directory.
     """
+    recovered = path.parent / '.local' / 'recovered-exports'
     for item in path.iterdir():
-        if item.is_file() and item.suffix.lower() != ".json":
+        if not item.is_file() or item.suffix.lower() == '.json':
+            continue
+        if ((item.name.startswith('.') and item.name.endswith('.json.tmp')) or
+                (item.suffix.lower() == '.csv' and item.name.endswith(('_schema.csv', '_samples.csv')))):
             item.unlink()
+            continue
+        local_root = path.parent / '.local'
+        local_root.mkdir(parents=True, exist_ok=True)
+        try:
+            local_root.resolve().relative_to(path.parent.resolve())
+        except ValueError:
+            raise RuntimeError('Local recovery directory must stay inside the export workspace') from None
+        recovered.mkdir(parents=True, exist_ok=True)
+        destination = recovered / item.name
+        counter = 2
+        while destination.exists():
+            destination = recovered / f'{item.stem}_{counter}{item.suffix}'
+            counter += 1
+        item.replace(destination)
 
 
 def export_database(spec: ConnectionSpec, scope: str, database: str = "", schema: str = "", table: str = "",
                     database_names: list[str] | None = None, table_names: list[str] | None = None,
                     sample_limit: int = 20, expensive_sampling: bool = False, sample_threshold: int = 250000,
                     coherent_samples: bool = True, compact_large_values: bool = False,
-                    max_value_bytes: int = 4096, output_dir: str | Path = "export",
+                    max_value_bytes: int = 4096, redact_sensitive_data: bool = False,
+                    output_dir: str | Path = "export",
                     now: dt.datetime | None = None, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Write exactly one complete JSON artifact for the requested scope.
 
@@ -961,6 +1064,7 @@ def export_database(spec: ConnectionSpec, scope: str, database: str = "", schema
             "requested_tables": table_names or None, "sample_limit_per_table": sample_limit,
             "sampling_strategy": "random_sort_small_approximate_integer_pk_large",
             "coherent_samples": coherent_samples, "compact_large_values": compact_large_values,
+            "redact_sensitive_data": redact_sensitive_data,
             "max_value_bytes": max_value_bytes if compact_large_values else None,
             "row_count_method": "COUNT(*) per table, nontransactional per-query snapshot",
             "row_encoding": {"decimal": "tagged lossless decimal string", "binary": "base64 tagged object",
@@ -1044,6 +1148,10 @@ def export_database(spec: ConnectionSpec, scope: str, database: str = "", schema
                     out["validation"]["sampled_rows"] = sum(
                         len(o["sample_rows"]) for r in list(out["databases"].values()) + [rec]
                         for sc in r["schemas"].values() for o in sc["tables"].values())
+                if redact_sensitive_data:
+                    rec["redacted_sample_values"] = redact_samples(rec)
+                    if rec["redacted_sample_values"]:
+                        warnings.append(f"Sensitive sample columns redacted in {db} (best effort; NOT guaranteed anonymization)")
                 out["databases"][db] = rec
                 out["validation"]["object_counts"][db] = {"tables": rec["table_count"], "views": rec["view_count"]}
             finally:
@@ -1052,6 +1160,8 @@ def export_database(spec: ConnectionSpec, scope: str, database: str = "", schema
     finally:
         root.close()
     out["summary"] = validate_document(out, selected, sample_limit, issues)
+    out["summary"]["redacted_sample_values"] = sum(
+        rec.get("redacted_sample_values", 0) for rec in out["databases"].values())
     # Differentiate missing/failed metadata from independent COUNT and SAMPLE failures.
     metadata_errors = [e for e in errors if not e.startswith(("Exact row count failed", "Sample failed", "Index-pivot sample failed"))]
     sample_issues = [i for i in issues if i.startswith(("Invalid sample count", "Row/column shape mismatch",
@@ -1100,8 +1210,10 @@ def export_database(spec: ConnectionSpec, scope: str, database: str = "", schema
         with tmp.open("r", encoding="utf-8") as handle:
             parsed = json.load(handle)
         disk_issues: list[str] = []
-        validate_document(parsed, selected, sample_limit, disk_issues)
-        if disk_issues or parsed["summary"] != out["summary"]:
+        disk_summary = validate_document(parsed, selected, sample_limit, disk_issues)
+        disk_summary["redacted_sample_values"] = sum(
+            rec.get("redacted_sample_values", 0) for rec in parsed["databases"].values())
+        if disk_issues or parsed["summary"] != disk_summary:
             raise RuntimeError(f"Serialized JSON validation failed: {disk_issues}")
         tmp.replace(dest)
     finally:
