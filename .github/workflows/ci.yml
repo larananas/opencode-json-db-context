@@ -25,7 +25,7 @@ jobs:
           - { label: macOS-ARM64, runner: macos-15, python: '3.13' }
           - { label: Linux-x64-Python310, runner: ubuntu-24.04, python: '3.10' }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
